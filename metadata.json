@@ -1,0 +1,6 @@
+{
+  "name": "VibeVoice",
+  "description": "A dark, futuristic vocal synthesizer DAW with canvas piano roll, smart phonemizer, and Supabase cloud sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
