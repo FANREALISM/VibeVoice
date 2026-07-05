@@ -21,21 +21,10 @@ export default defineConfig(({mode}) => {
       hmr: process.env.DISABLE_HMR !== 'true',
     },
     build: {
-      rollupOptions: {
-        output: {
-          manualChunks(id: string) {
-            if (id.includes('node_modules')) {
-              if (id.includes('tone')) return 'vendor-tone';
-              if (id.includes('konva')) return 'vendor-konva';
-              if (id.includes('@supabase')) return 'vendor-supabase';
-              if (id.includes('jszip')) return 'vendor-jszip';
-              if (id.includes('cmu-pronouncing-dictionary')) return 'vendor-cmudict';
-              if (id.includes('react-dom') || id.includes('/react/')) return 'vendor-react';
-              return 'vendor';
-            }
-          },
-        },
-      },
+      // No custom manualChunks: Rollup's default chunking is dependency-graph
+      // aware and won't load a chunk before something it needs (e.g. React)
+      // has executed. Manual splitting was causing exactly that crash.
+      // Revisit only if bundle size becomes an actual measured problem.
     },
   };
 });
