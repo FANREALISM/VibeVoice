@@ -654,6 +654,20 @@ class AudioEngine {
             }
           });
 
+          // AudioWorkletNode processor crashes (an uncaught throw inside
+          // process()) are otherwise completely silent — no console output,
+          // no rejected promise, nothing. This is the only way to find out
+          // if that's what's happening.
+          workletNode.onprocessorerror = (event) => {
+            console.error('[FormantProcessor] worklet processor crashed:', event);
+          };
+
+          console.log(
+            `[triggerNoteWithFormant] lyric='${lyric}' contextTime=${this.nativeContext.currentTime.toFixed(3)} ` +
+            `actualStartTime=${actualStartTime.toFixed(3)} pitchRatio=${pitchRatio.toFixed(3)} ` +
+            `contextState=${this.nativeContext.state}`
+          );
+
           const consonantPlayer = new Tone.Player(buffer);
           const vowelPlayer = new Tone.Player({
             url: buffer,
@@ -702,6 +716,11 @@ class AudioEngine {
           const vowelStartTime = actualStartTime + consonantSec;
           let vowelDuration = noteDur - (consonantSec - preutteranceSec);
           if (vowelDuration < 0.01) vowelDuration = 0.01;
+
+          console.log(
+            `[triggerNoteWithFormant] vowelStartTime=${vowelStartTime.toFixed(3)} vowelDuration=${vowelDuration.toFixed(3)} ` +
+            `bufferDuration=${buffer.duration.toFixed(3)} offsetSec=${offsetSec.toFixed(3)} consonantSec=${consonantSec.toFixed(3)}`
+          );
 
           consonantPlayer.start(actualStartTime, offsetSec, consonantSec);
           vowelPlayer.start(vowelStartTime, vowelStart);
