@@ -351,6 +351,16 @@ class AudioEngine {
     // destination) only now that Tone's context is guaranteed running.
     this.buildSynthGraph();
     
+    // TEMPORARILY DISABLED: AudioWorkletNode construction is failing with
+    // InvalidAccessError on every note (see console) after the context-unwrap
+    // fix — addModule and node construction appear to end up on objects that
+    // only look identical (Tone's context wrapper internals, not inspectable
+    // from here). Rather than keep guessing at Tone's internals blind, force
+    // the known-working GrainPlayer fallback path for all notes until the
+    // worklet is revisited. Flip this back to workletReady = <real check>
+    // once the InvalidAccessError is actually root-caused.
+    this.workletReady = false;
+    /* original detection, left for when we come back to this:
     if (this.nativeContext && this.nativeContext.audioWorklet) {
       try {
         await this.nativeContext.audioWorklet.addModule(processorUrl);
@@ -363,6 +373,7 @@ class AudioEngine {
     } else {
       this.workletReady = false;
     }
+    */
 
     Tone.Transport.PPQ = 480; 
     await dictPromise;
@@ -899,6 +910,16 @@ class AudioEngine {
     const grainOverlap = 0.04;
     const detuneCents = shiftSemis * 100;
 
+    // GrainPlayer's `detune` speeds up each grain's internal playback to
+    // achieve pitch shift (it is not true time-domain pitch shifting).
+    // At higher pitchRatio, more grains complete within the same grainSize/
+    // overlap window, so more of them sum together — loudness climbs with
+    // pitch instead of staying constant. This is a heuristic compensation,
+    // not an exact physical model — listen and retune the exponent if it's
+    // over/under-corrected.
+    const loudnessCompensation = 1 / Math.max(1, Math.sqrt(pitchRatio));
+    const compensatedVel = vel * loudnessCompensation;
+
     const consonantPlayer = new Tone.GrainPlayer({
       url: buffer,
       detune: detuneCents,
@@ -927,7 +948,7 @@ class AudioEngine {
       release: 0.1,
     });
     
-    const volNode = new Tone.Volume(Tone.gainToDb(vel));
+    const volNode = new Tone.Volume(Tone.gainToDb(compensatedVel));
 
     consonantPlayer.disconnect();
     vowelPlayer.disconnect();
