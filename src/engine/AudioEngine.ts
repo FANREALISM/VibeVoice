@@ -222,6 +222,13 @@ class AudioEngine {
       if (this.isXSampa) {
         console.log("X-SAMPA aliasing format detected.");
       }
+      // Full alias dump (not just first 20) — needed to see the actual vowel/
+      // consonant symbol set this voicebank uses, so arpabetToXSampa can be
+      // expanded against real data instead of guessed blind.
+      console.log("FULL ALIAS LIST:", allAliases);
+      const singleTokenSet = new Set<string>();
+      allAliases.forEach(a => a.split(' ').forEach(p => { if (p !== '-') singleTokenSet.add(p); }));
+      console.log("Unique single phoneme tokens across all aliases:", Array.from(singleTokenSet).sort());
 
     } else {
       console.warn("No .wav files found in zip.");
@@ -482,8 +489,12 @@ class AudioEngine {
 
       const possibleAliases = variations.map(v => v.join(' '));
       for (const translatedAlias of possibleAliases) {
-          if (this.voicebank.has(translatedAlias)) return this.voicebank.get(translatedAlias);
+          if (this.voicebank.has(translatedAlias)) {
+            console.log(`[ALIAS LOOKUP] '${alias}' -> HIT '${translatedAlias}' (tried: ${possibleAliases.join(', ')})`);
+            return this.voicebank.get(translatedAlias);
+          }
       }
+      console.log(`[ALIAS LOOKUP] '${alias}' -> MISS (tried: ${possibleAliases.join(', ')})`);
     }
 
     // 4. Common Spelling Normalizations 
@@ -492,10 +503,12 @@ class AudioEngine {
         if (key.toLowerCase() === alias.toLowerCase() || 
             (hiragana && key.includes(hiragana)) || 
             key.includes(alias)) {
+          console.log(`[ALIAS LOOKUP] '${alias}' -> HIT via loose substring match '${key}'`);
           return val;
         }
       }
     }
+    console.log(`[ALIAS LOOKUP] '${alias}' -> TOTAL MISS, will fall back to synth`);
     return undefined;
   }
 
