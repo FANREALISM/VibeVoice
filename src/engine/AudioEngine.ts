@@ -287,21 +287,32 @@ class AudioEngine {
     // blocks the other.
     const dictPromise = preloadCmuDictionary();
     
-    // Create native context manually to bypass iframe prototype issues
-    const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
-    const nativeCtx = new AudioContextClass();
-    this.nativeContext = nativeCtx;
-    
-    // Force Tone.js to use this pure native context
-    Tone.setContext(nativeCtx);
-    
-    // Now start Tone
+    // IMPORTANT: do NOT construct a separate `new AudioContext()` here and
+    // hand it to Tone.setContext(). Tone.Transport (and anything else that
+    // touches Tone.* before this point, e.g. PianoRoll's playhead effect)
+    // may already have been lazily created against Tone's own default
+    // context — Transport's internal Clock stays bound to whichever context
+    // existed when it was first constructed. Calling Tone.setContext() with
+    // a brand-new context afterwards does NOT re-bind that already-created
+    // Transport: the two end up running on two different AudioContext
+    // clocks. Transport.schedule() callbacks then receive a `time` value
+    // from the OLD context's near-zero clock while playback nodes live on
+    // the NEW context (already many seconds into its life) — every
+    // Transport-scheduled note gets scheduled to start in the past/at a
+    // meaningless time, so it silently plays nothing, while directly-timed
+    // playback (Tone.now()-based, e.g. piano-roll preview clicks) is
+    // unaffected and works fine. That mismatch was the actual cause of
+    // "sound on preview click, silence on Play".
+    //
+    // Fix: reuse the context Tone.js already has, so there is only ever one
+    // AudioContext and Transport is always talking about the same clock as
+    // everything else.
     await Tone.start();
+    const nativeCtx = Tone.getContext().rawContext as unknown as AudioContext;
+    this.nativeContext = nativeCtx;
 
     // Build the fallback synth graph (PolySynth -> filter -> effectChain ->
-    // destination) only now, on the context that will actually be used for
-    // playback. See the constructor's comment for why this can't happen
-    // earlier.
+    // destination) only now that Tone's context is guaranteed running.
     this.buildSynthGraph();
     
     if (this.nativeContext && this.nativeContext.audioWorklet) {
@@ -371,17 +382,7 @@ class AudioEngine {
         this.scheduleLyricTicks(note.pitch, note.lyric, note.velocity, note.startTick, note.durationTick, note.formant || 1.0);
       });
 
-      console.log(
-        `[togglePlayback] before Transport.start() — ` +
-        `nativeContextState=${this.nativeContext?.state} toneContextState=${Tone.getContext().state} ` +
-        `transportState=${Tone.Transport.state}`
-      );
       Tone.Transport.start();
-      console.log(
-        `[togglePlayback] after Transport.start() — ` +
-        `nativeContextState=${this.nativeContext?.state} toneContextState=${Tone.getContext().state} ` +
-        `transportState=${Tone.Transport.state}`
-      );
       return true;
     }
   }
@@ -679,11 +680,6 @@ class AudioEngine {
         new URLSearchParams(window.location.search).get('bypassFormant') === '1';
 
       if (bypassFormant) {
-        console.log(
-          `[BYPASS TRIGGER] lyric='${lyric}' contextState=${Tone.getContext().state} ` +
-          `nativeContextState=${this.nativeContext?.state} transportState=${Tone.Transport.state} ` +
-          `Tone.now=${Tone.now().toFixed(3)} actualStartTime=${actualStartTime.toFixed(3)}`
-        );
         const consonantPlayer = new Tone.Player(buffer);
         const vowelPlayer = new Tone.Player({ url: buffer, loop: true, loopStart: vowelStart, loopEnd: vowelEnd });
         const tightOverlap = Math.min(0.03, overlapSec > 0 ? overlapSec : 0.01);
