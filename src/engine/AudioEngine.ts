@@ -229,6 +229,11 @@ class AudioEngine {
       const singleTokenSet = new Set<string>();
       allAliases.forEach(a => a.split(' ').forEach(p => { if (p !== '-') singleTokenSet.add(p); }));
       console.log("Unique single phoneme tokens across all aliases:", Array.from(singleTokenSet).sort());
+      // Targeted: what does this voicebank actually call transitions involving
+      // 'k' and vowels close to 'aa'/'uh'? Need real naming convention, not a guess.
+      console.log("Aliases containing 'k':", allAliases.filter(a => a.split(' ').includes('k')));
+      console.log("Aliases containing 'a', 'A', 'Q', or '@':", allAliases.filter(a => /(^|\s)(a|A|Q|@)($|\s)/.test(a)));
+      console.log("Aliases containing 'U' or 'u':", allAliases.filter(a => /(^|\s)(U|u)($|\s)/.test(a)));
 
     } else {
       console.warn("No .wav files found in zip.");
@@ -315,7 +320,31 @@ class AudioEngine {
     // AudioContext and Transport is always talking about the same clock as
     // everything else.
     await Tone.start();
-    const nativeCtx = Tone.getContext().rawContext as unknown as AudioContext;
+    // Tone.getContext().rawContext can, depending on Tone's internal context
+    // backend, be a wrapper object rather than a genuine native AudioContext.
+    // AudioWorkletNode's constructor does a strict internal brand check
+    // (instanceof BaseAudioContext) — a TS cast doesn't change that at
+    // runtime, so if rawContext isn't the real thing, worklet creation fails
+    // on every single note with "parameter 1 is not of type BaseAudioContext"
+    // while silently falling back to the lower-quality GrainPlayer path.
+    // Unwrap defensively instead of trusting the cast.
+    let candidateCtx: any = Tone.getContext().rawContext;
+    if (!(candidateCtx instanceof AudioContext)) {
+      const unwrapped = candidateCtx?._nativeAudioContext || candidateCtx?._context || candidateCtx?.context;
+      if (unwrapped instanceof AudioContext) {
+        console.warn("Tone.getContext().rawContext was a wrapper, not a native AudioContext — unwrapped it for AudioWorkletNode use.");
+        candidateCtx = unwrapped;
+      } else {
+        console.error(
+          "Could not resolve a native AudioContext from Tone's context " +
+          "(constructor: " + candidateCtx?.constructor?.name + "). " +
+          "AudioWorkletNode creation will fail and every note will silently " +
+          "fall back to GrainPlayer. Report this constructor name if the " +
+          "console still shows 'not of type BaseAudioContext' after this build."
+        );
+      }
+    }
+    const nativeCtx = candidateCtx as AudioContext;
     this.nativeContext = nativeCtx;
 
     // Build the fallback synth graph (PolySynth -> filter -> effectChain ->
