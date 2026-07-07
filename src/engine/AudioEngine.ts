@@ -48,13 +48,13 @@ const arpabetToXSampa: Record<string, string[]> = {
 };
 
 class AudioEngine {
-  private synth: Tone.PolySynth;
+  private synth!: Tone.PolySynth;
   private voicebank: Map<string, UtauSample> = new Map();
   private useCustomVoice: boolean = false;
   private isInitialized: boolean = false;
   private baseMidi = 60; // Assuming C4 as base
   private activeSources: any[] = [];
-  private effectChain: Tone.Volume;
+  private effectChain!: Tone.Volume;
   private workletReady: boolean = false;
   private isXSampa: boolean = false;
   public nativeContext?: AudioContext;
@@ -63,7 +63,20 @@ class AudioEngine {
   private audioTrackRaw: { blob: Blob; name: string } | null = null;
 
   constructor() {
-    // Vocal-like synthesis settings (Fallback)
+    // NOTE: synth/filter/effectChain are intentionally NOT built here.
+    // init() creates a fresh native AudioContext and calls Tone.setContext()
+    // on it. Any Tone node instantiated before that swap stays bound to the
+    // old (default) context's destination — connecting it to nodes on the
+    // new context fails silently in the Web Audio API (no error, no sound).
+    // That was exactly the "still no sound" bug: the AudioWorklet path
+    // bypasses effectChain and routes straight to nativeContext.destination,
+    // so it kept working, while the GrainPlayer/plain-synth fallback paths
+    // (which both route through effectChain) went completely silent whenever
+    // the worklet wasn't in use. Building these lazily inside init(), after
+    // setContext(), keeps everything on the same context.
+  }
+
+  private buildSynthGraph() {
     this.synth = new Tone.PolySynth(Tone.FMSynth, {
       harmonicity: 3,
       modulationIndex: 2.5,
@@ -84,10 +97,10 @@ class AudioEngine {
     });
 
     const filter = new Tone.Filter(3000, "lowpass");
-    
+
     this.effectChain = new Tone.Volume(0);
     this.effectChain.chain(filter, Tone.getDestination());
-    
+
     this.synth.connect(this.effectChain);
   }
 
@@ -284,6 +297,12 @@ class AudioEngine {
     
     // Now start Tone
     await Tone.start();
+
+    // Build the fallback synth graph (PolySynth -> filter -> effectChain ->
+    // destination) only now, on the context that will actually be used for
+    // playback. See the constructor's comment for why this can't happen
+    // earlier.
+    this.buildSynthGraph();
     
     if (this.nativeContext && this.nativeContext.audioWorklet) {
       try {
