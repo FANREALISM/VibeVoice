@@ -35,21 +35,22 @@ export default function App() {
   };
 
   const handlePlayToggle = async () => {
-    if (Tone.getContext().rawContext.state === 'suspended') {
-      await Tone.getContext().rawContext.resume();
-    }
-    if (audioEngine.nativeContext && audioEngine.nativeContext.state === 'suspended') {
-      await audioEngine.nativeContext.resume();
-    }
-    await Tone.start();
-
-    // 3. Now ensure engine is initialized
+    // Engine init still gated here (first-ever interaction only) — the
+    // actual AudioContext resume now happens exactly once, inside
+    // audioEngine.togglePlayback(). Duplicating the resume sequence here
+    // too (as before) added several extra await hops before playback ever
+    // got scheduled, for no benefit.
     if (!isEngineStarted) {
       await handleStartEngine();
     }
-    
-    const newState = await audioEngine.togglePlayback(notes, bpm, isPlaying);
-    setIsPlaying(newState);
+
+    try {
+      const newState = await audioEngine.togglePlayback(notes, bpm, isPlaying);
+      setIsPlaying(newState);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      alert(err instanceof Error ? err.message : 'Playback failed to start — try clicking Play again.');
+    }
   };
 
   const handleStop = () => {
@@ -89,8 +90,12 @@ export default function App() {
 
       if (e.code === 'Space') {
         e.preventDefault();
-        const newState = await audioEngine.togglePlayback(notes, bpm, isPlaying);
-        setIsPlaying(newState);
+        try {
+          const newState = await audioEngine.togglePlayback(notes, bpm, isPlaying);
+          setIsPlaying(newState);
+        } catch (err) {
+          console.error(err instanceof Error ? err.message : String(err));
+        }
       } else if ((e.code === 'Delete' || e.code === 'Backspace')) {
         const selectedIds = useProjectStore.getState().selectedNoteIds;
         if (selectedIds.length > 0) {

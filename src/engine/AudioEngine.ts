@@ -398,6 +398,19 @@ class AudioEngine {
     if (Tone.getContext().state !== 'running') {
       await Tone.getContext().resume();
     }
+    // Some browsers resolve resume() without actually transitioning the
+    // context to 'running' (e.g. transient-activation already spent by the
+    // time this promise settles, or the resume request was silently
+    // ignored). Previously we trusted the resolved promise and scheduled
+    // playback anyway — that produced the exact symptom of "notes get
+    // scheduled, nothing audible, and the console prints the suspended
+    // warning right after". Fail loudly instead of pretending it worked.
+    if (this.nativeContext && this.nativeContext.state !== 'running') {
+      throw new Error(
+        `AudioContext is still "${this.nativeContext.state}" after a resume attempt. ` +
+        `Click Play again — some browsers need a second direct click to actually unlock audio.`
+      );
+    }
   }
 
   public async playNote(pitch: number, lyric: string = "a", velocity: number = 100) {
