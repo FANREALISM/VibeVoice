@@ -371,7 +371,17 @@ class AudioEngine {
         this.scheduleLyricTicks(note.pitch, note.lyric, note.velocity, note.startTick, note.durationTick, note.formant || 1.0);
       });
 
+      console.log(
+        `[togglePlayback] before Transport.start() — ` +
+        `nativeContextState=${this.nativeContext?.state} toneContextState=${Tone.getContext().state} ` +
+        `transportState=${Tone.Transport.state}`
+      );
       Tone.Transport.start();
+      console.log(
+        `[togglePlayback] after Transport.start() — ` +
+        `nativeContextState=${this.nativeContext?.state} toneContextState=${Tone.getContext().state} ` +
+        `transportState=${Tone.Transport.state}`
+      );
       return true;
     }
   }
@@ -669,6 +679,11 @@ class AudioEngine {
         new URLSearchParams(window.location.search).get('bypassFormant') === '1';
 
       if (bypassFormant) {
+        console.log(
+          `[BYPASS TRIGGER] lyric='${lyric}' contextState=${Tone.getContext().state} ` +
+          `nativeContextState=${this.nativeContext?.state} transportState=${Tone.Transport.state} ` +
+          `Tone.now=${Tone.now().toFixed(3)} actualStartTime=${actualStartTime.toFixed(3)}`
+        );
         const consonantPlayer = new Tone.Player(buffer);
         const vowelPlayer = new Tone.Player({ url: buffer, loop: true, loopStart: vowelStart, loopEnd: vowelEnd });
         const tightOverlap = Math.min(0.03, overlapSec > 0 ? overlapSec : 0.01);
