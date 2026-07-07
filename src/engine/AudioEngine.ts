@@ -638,6 +638,49 @@ class AudioEngine {
 
       let sourceObj: any;
 
+      // Diagnostic bypass: ?bypassFormant=1 in the URL skips the
+      // AudioWorkletNode entirely and routes straight to the destination.
+      // If sound IS heard during Play with this flag on, the worklet is the
+      // culprit under concurrent multi-note load. If it's STILL silent,
+      // the bug is upstream of the worklet (players/envelope/connection
+      // graph itself), not the DSP code. One build, two test conditions,
+      // no further guessing needed to isolate which half of the pipeline
+      // is at fault.
+      const bypassFormant = typeof window !== 'undefined' &&
+        new URLSearchParams(window.location.search).get('bypassFormant') === '1';
+
+      if (bypassFormant) {
+        const consonantPlayer = new Tone.Player(buffer);
+        const vowelPlayer = new Tone.Player({ url: buffer, loop: true, loopStart: vowelStart, loopEnd: vowelEnd });
+        const tightOverlap = Math.min(0.03, overlapSec > 0 ? overlapSec : 0.01);
+        const env = new Tone.AmplitudeEnvelope({ attack: tightOverlap, decay: 0, sustain: 1, release: 0.1 });
+        const volNode = new Tone.Volume(Tone.gainToDb(vel)).connect(Tone.getDestination());
+        consonantPlayer.disconnect();
+        vowelPlayer.disconnect();
+        consonantPlayer.connect(env);
+        vowelPlayer.connect(env);
+        env.connect(volNode);
+
+        const noteDur = duration || 0.5;
+        const vowelStartTime = actualStartTime + consonantSec;
+        let vowelDuration = noteDur - (consonantSec - preutteranceSec);
+        if (vowelDuration < 0.01) vowelDuration = 0.01;
+
+        consonantPlayer.start(actualStartTime, offsetSec, consonantSec);
+        vowelPlayer.start(vowelStartTime, vowelStart);
+        env.triggerAttack(actualStartTime);
+        env.triggerRelease(vowelStartTime + vowelDuration);
+        consonantPlayer.stop(vowelStartTime + 0.1);
+        vowelPlayer.stop(vowelStartTime + vowelDuration + 0.3);
+
+        const cleanupDelayMs = ((vowelStartTime + vowelDuration + 1.0) - Tone.now()) * 1000;
+        setTimeout(() => {
+          try { consonantPlayer.dispose(); vowelPlayer.dispose(); env.dispose(); volNode.dispose(); } catch (e) {}
+        }, Math.max(0, cleanupDelayMs));
+
+        return;
+      }
+
       if (this.workletReady && this.nativeContext) {
         try {
           // Ensure context is running - critical for AudioWorklet
