@@ -322,21 +322,30 @@ class AudioEngine {
       this.stop();
       return false;
     } else {
-      if (this.nativeContext && this.nativeContext.state === 'suspended') {
-        await this.nativeContext.resume();
-      }
-      await Tone.start();
-      if (Tone.getContext().state !== 'running') {
-        await Tone.getContext().resume();
-      }
-      
+      await this.ensureAudioContextRunning();
+
       Tone.Transport.stop();
       Tone.Transport.cancel(0);
 
       Tone.Transport.bpm.value = bpm;
 
       if (this.trackPlayer) {
-        this.trackPlayer.start(0);
+        try {
+          // A synced Player retains internal "started" state across
+          // Transport.stop()/cancel() cycles. Calling start(0) a second
+          // time without stopping it first can throw ("Start time must be
+          // strictly greater than previous start time"), which — since
+          // nothing downstream was in a try/catch — silently aborted the
+          // rest of this function before notes.forEach() and
+          // Transport.start() ever ran. That produced exactly "click Play,
+          // nothing happens, no error visible unless you check the console".
+          if (this.trackPlayer.state === 'started') {
+            this.trackPlayer.stop();
+          }
+          this.trackPlayer.start(0);
+        } catch (e) {
+          console.error('Failed to start backing track:', e instanceof Error ? e.message : e);
+        }
       }
 
       notes.forEach((note) => {
@@ -373,12 +382,30 @@ class AudioEngine {
     this.activeSources = [];
   }
 
-  public playNote(pitch: number, lyric: string = "a", velocity: number = 100) {
-    if (!this.isInitialized) {
-      this.init().then(() => this.playSyllablesInternal(pitch, lyric, velocity, undefined, 0.5));
-    } else {
-      this.playSyllablesInternal(pitch, lyric, velocity, undefined, 0.5);
+  /**
+   * Resumes the AudioContext if suspended. Must be called synchronously-ish
+   * from within a real user gesture (click handler) — browsers only honor
+   * resume()/Tone.start() when called close to an actual click/keypress.
+   * Every public method that can produce audible output calls this first;
+   * previously only togglePlayback() did, which meant piano-roll preview
+   * clicks (playNote) fired silently against a still-suspended context.
+   */
+  private async ensureAudioContextRunning() {
+    if (this.nativeContext && this.nativeContext.state === 'suspended') {
+      await this.nativeContext.resume();
     }
+    await Tone.start();
+    if (Tone.getContext().state !== 'running') {
+      await Tone.getContext().resume();
+    }
+  }
+
+  public async playNote(pitch: number, lyric: string = "a", velocity: number = 100) {
+    if (!this.isInitialized) {
+      await this.init();
+    }
+    await this.ensureAudioContextRunning();
+    this.playSyllablesInternal(pitch, lyric, velocity, undefined, 0.5);
   }
 
   private getAliasSample(alias: string): UtauSample | undefined {
