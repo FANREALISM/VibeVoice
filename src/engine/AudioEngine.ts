@@ -4,6 +4,25 @@ import { romajiToHiraganaMap, parseEnglishToPhonemes, buildCVVCAliases, preloadC
 // @ts-ignore
 import processorUrl from '/processors/FormantProcessor.js?url';
 
+// Bind Tone.js to a dedicated native AudioContext IMMEDIATELY on module load,
+// before React mounts anything. This is the actual fix for the Transport-
+// clock-mismatch bug: App.tsx / PianoRoll.tsx touch Tone.Transport in a
+// useEffect on mount, well before AudioEngine.init() ever runs (init only
+// runs on a user gesture, e.g. pressing Play). If we set the context here,
+// Transport is born on the right context from its very first access, so we
+// get both things the previous two attempts each had half of:
+//   - a real, self-created AudioContext (so AudioWorkletNode construction is
+//     against a plain native context, not Tone's internal wrapper — this is
+//     what made the worklet reliable before, and what broke when we switched
+//     to unwrapping Tone.getContext().rawContext)
+//   - Transport and all audio nodes sharing one clock from the start (so we
+//     don't reintroduce "sound on preview, silence on Play")
+// Creating the context here is safe pre-user-gesture: it can exist suspended
+// until Tone.start() resumes it later inside a real click handler.
+const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+const dedicatedNativeContext: AudioContext = new AudioContextClass();
+Tone.setContext(dedicatedNativeContext);
+
 interface OtoParameters {
   file: string;
   alias: string;
@@ -299,68 +318,18 @@ class AudioEngine {
     // blocks the other.
     const dictPromise = preloadCmuDictionary();
     
-    // IMPORTANT: do NOT construct a separate `new AudioContext()` here and
-    // hand it to Tone.setContext(). Tone.Transport (and anything else that
-    // touches Tone.* before this point, e.g. PianoRoll's playhead effect)
-    // may already have been lazily created against Tone's own default
-    // context — Transport's internal Clock stays bound to whichever context
-    // existed when it was first constructed. Calling Tone.setContext() with
-    // a brand-new context afterwards does NOT re-bind that already-created
-    // Transport: the two end up running on two different AudioContext
-    // clocks. Transport.schedule() callbacks then receive a `time` value
-    // from the OLD context's near-zero clock while playback nodes live on
-    // the NEW context (already many seconds into its life) — every
-    // Transport-scheduled note gets scheduled to start in the past/at a
-    // meaningless time, so it silently plays nothing, while directly-timed
-    // playback (Tone.now()-based, e.g. piano-roll preview clicks) is
-    // unaffected and works fine. That mismatch was the actual cause of
-    // "sound on preview click, silence on Play".
-    //
-    // Fix: reuse the context Tone.js already has, so there is only ever one
-    // AudioContext and Transport is always talking about the same clock as
-    // everything else.
+    // Context is already bound at module load time (see top of this file) —
+    // Transport was born on `dedicatedNativeContext`, so there is no clock
+    // mismatch to work around here, and no need to unwrap anything from
+    // Tone's internals. Tone.start() just resumes the (already-correct)
+    // context on this user gesture.
     await Tone.start();
-    // Tone.getContext().rawContext can, depending on Tone's internal context
-    // backend, be a wrapper object rather than a genuine native AudioContext.
-    // AudioWorkletNode's constructor does a strict internal brand check
-    // (instanceof BaseAudioContext) — a TS cast doesn't change that at
-    // runtime, so if rawContext isn't the real thing, worklet creation fails
-    // on every single note with "parameter 1 is not of type BaseAudioContext"
-    // while silently falling back to the lower-quality GrainPlayer path.
-    // Unwrap defensively instead of trusting the cast.
-    let candidateCtx: any = Tone.getContext().rawContext;
-    if (!(candidateCtx instanceof AudioContext)) {
-      const unwrapped = candidateCtx?._nativeAudioContext || candidateCtx?._context || candidateCtx?.context;
-      if (unwrapped instanceof AudioContext) {
-        console.warn("Tone.getContext().rawContext was a wrapper, not a native AudioContext — unwrapped it for AudioWorkletNode use.");
-        candidateCtx = unwrapped;
-      } else {
-        console.error(
-          "Could not resolve a native AudioContext from Tone's context " +
-          "(constructor: " + candidateCtx?.constructor?.name + "). " +
-          "AudioWorkletNode creation will fail and every note will silently " +
-          "fall back to GrainPlayer. Report this constructor name if the " +
-          "console still shows 'not of type BaseAudioContext' after this build."
-        );
-      }
-    }
-    const nativeCtx = candidateCtx as AudioContext;
-    this.nativeContext = nativeCtx;
+    this.nativeContext = dedicatedNativeContext;
 
     // Build the fallback synth graph (PolySynth -> filter -> effectChain ->
-    // destination) only now that Tone's context is guaranteed running.
+    // destination) only now that the context is guaranteed running.
     this.buildSynthGraph();
-    
-    // TEMPORARILY DISABLED: AudioWorkletNode construction is failing with
-    // InvalidAccessError on every note (see console) after the context-unwrap
-    // fix — addModule and node construction appear to end up on objects that
-    // only look identical (Tone's context wrapper internals, not inspectable
-    // from here). Rather than keep guessing at Tone's internals blind, force
-    // the known-working GrainPlayer fallback path for all notes until the
-    // worklet is revisited. Flip this back to workletReady = <real check>
-    // once the InvalidAccessError is actually root-caused.
-    this.workletReady = false;
-    /* original detection, left for when we come back to this:
+
     if (this.nativeContext && this.nativeContext.audioWorklet) {
       try {
         await this.nativeContext.audioWorklet.addModule(processorUrl);
@@ -373,7 +342,6 @@ class AudioEngine {
     } else {
       this.workletReady = false;
     }
-    */
 
     Tone.Transport.PPQ = 480; 
     await dictPromise;
