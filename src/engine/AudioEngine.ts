@@ -727,7 +727,7 @@ class AudioEngine {
         const noteDur = duration || 0.5;
         const vowelStartTime = actualStartTime + consonantSec;
         let vowelDuration = noteDur - (consonantSec - preutteranceSec);
-        if (vowelDuration < 0.01) vowelDuration = 0.01;
+        if (vowelDuration < 0.08) vowelDuration = 0.08;
 
         consonantPlayer.start(actualStartTime, offsetSec, consonantSec);
         vowelPlayer.start(vowelStartTime, vowelStart);
@@ -821,7 +821,16 @@ class AudioEngine {
           const noteDur = duration || 0.5;
           const vowelStartTime = actualStartTime + consonantSec;
           let vowelDuration = noteDur - (consonantSec - preutteranceSec);
-          if (vowelDuration < 0.01) vowelDuration = 0.01;
+          // 0.01s (10ms) was the previous floor here — inaudible on its own,
+          // and shorter than the worklet's grain size, so it produced
+          // effectively nothing. This is the actual reason "aku" was still
+          // silent even after the earlier duration-floor fix: that fix
+          // floored the *total* segment length, but consonantSec alone
+          // (up to ~150ms from this voicebank's oto.ini) was eating the
+          // whole budget before vowelDuration was computed, leaving this
+          // line to clamp it right back down to 10ms regardless.
+          const MIN_VOWEL_SECONDS = 0.08;
+          if (vowelDuration < MIN_VOWEL_SECONDS) vowelDuration = MIN_VOWEL_SECONDS;
 
           console.log(
             `[triggerNoteWithFormant] vowelStartTime=${vowelStartTime.toFixed(3)} vowelDuration=${vowelDuration.toFixed(3)} ` +
@@ -949,7 +958,7 @@ class AudioEngine {
     const noteDur = duration || 0.5;
     const vowelStartTime = actualStartTime + consonantSec;
     let vowelDuration = noteDur - (consonantSec - preutteranceSec);
-    if (vowelDuration < 0.01) vowelDuration = 0.01;
+    if (vowelDuration < 0.08) vowelDuration = 0.08;
 
     consonantPlayer.start(actualStartTime, offsetSec, consonantSec);
     vowelPlayer.start(vowelStartTime, vowelStart);
