@@ -608,7 +608,19 @@ class AudioEngine {
 
     console.log(`Scheduling for word '${lyric}':`, aliasesToPlay);
 
-    const subDurTick = durationTick / aliasesToPlay.length;
+    // Splitting the note's total duration equally across every CVVC alias
+    // (including brief consonant/transition aliases) can produce segments
+    // a few tens of milliseconds long on short notes — audibly nothing, and
+    // for the granular worklet specifically, shorter than its ~68ms warm-up.
+    // Floor each segment at a minimum audible length; this can make the
+    // sum of segments exceed the note's nominal duration on very short/
+    // heavily-multi-phoneme notes, which is the correct trade-off (a note
+    // that's audible but slightly late-ending beats one that's silent).
+    const currentBpmForFloor = Tone.Transport.bpm.value;
+    const ticksPerSecondForFloor = (currentBpmForFloor / 60) * Tone.Transport.PPQ;
+    const MIN_SEGMENT_SECONDS = 0.09;
+    const minSegmentTicks = MIN_SEGMENT_SECONDS * ticksPerSecondForFloor;
+    const subDurTick = Math.max(durationTick / aliasesToPlay.length, minSegmentTicks);
     aliasesToPlay.forEach((alias, index) => {
       const subStartTick = startTick + (index * subDurTick);
       

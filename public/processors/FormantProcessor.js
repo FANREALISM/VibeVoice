@@ -22,6 +22,15 @@ class FormantProcessor extends AudioWorkletProcessor {
         this.bufferSize = 65536;
         this.buffer = new Float32Array(this.bufferSize);
         this.writePtr = 0;
+        // How many real (non-zero-initialized) samples have been written
+        // since this processor was created. Used to stop triggerGrain()
+        // from reading uninitialized buffer regions on a freshly-started
+        // note — previously it always looked back a fixed 3000 samples
+        // regardless of how much real audio existed yet, guaranteeing the
+        // first ~68ms of every note (a brand new AudioWorkletNode is
+        // created per note/phoneme, so this hit on EVERY note) produced
+        // silent grains.
+        this.samplesWritten = 0;
         
         // Use a 55ms grain at 44.1kHz (~2425 samples)
         this.baseGrainSize = 2400; 
@@ -57,12 +66,16 @@ class FormantProcessor extends AudioWorkletProcessor {
         for (let i = 0; i < input.length; i++) {
             // Write input to ring buffer
             this.buffer[this.writePtr] = input[i];
+            if (this.samplesWritten < this.bufferSize) this.samplesWritten++;
 
             // Grain Spawning logic
             // Threshold is half the grain size for 50% overlap at 1.0 pitch
             // Increment adjusted by pitchRatio to change trigger frequency
             this.spawnTimer += pitchRatio;
-            if (this.spawnTimer >= (this.baseGrainSize / 2)) {
+            // Don't spawn grains until we actually have enough real history
+            // for triggerGrain()'s look-back to read (see MIN_LOOKBACK below)
+            // — otherwise early grains read uninitialized zeros.
+            if (this.spawnTimer >= (this.baseGrainSize / 2) && this.samplesWritten >= 64) {
                 this.spawnTimer = 0;
                 this.triggerGrain();
             }
@@ -114,11 +127,15 @@ class FormantProcessor extends AudioWorkletProcessor {
                 this.grains[i].active = true;
                 this.grains[i].pos = 0;
                 this.grains[i].len = this.baseGrainSize;
-                
-                // CRITICAL: Look back far enough to ensure the grain doesn't read future data.
-                // We look back at least baseGrainSize + margin.
-                // 3000 samples is ~68ms back, safe for a 55ms grain.
-                this.grains[i].readPtr = (this.writePtr - 3000 + this.bufferSize) % this.bufferSize;
+
+                // Look back far enough for a full 55ms grain without reading
+                // past what's actually been written into the ring buffer yet.
+                // Fixed 3000-sample look-back assumed the buffer always had
+                // that much real history — false for the first ~68ms of
+                // every note (a fresh AudioWorkletNode/buffer per phoneme).
+                const desiredLookback = 3000;
+                const safeLookback = Math.min(desiredLookback, this.samplesWritten);
+                this.grains[i].readPtr = (this.writePtr - safeLookback + this.bufferSize) % this.bufferSize;
                 return;
             }
         }
