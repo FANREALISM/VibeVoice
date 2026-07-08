@@ -88,6 +88,19 @@ export default function App() {
         return;
       }
 
+      // Holding a key down fires repeated keydown events at the OS's
+      // auto-repeat rate (roughly every 20-60ms once repeat kicks in).
+      // Without this guard, holding spacebar even slightly past a quick
+      // tap called togglePlayback() many times in rapid succession — each
+      // call toggles Play<->Stop, cancelling and rescheduling every note
+      // via Transport.cancel(). If the key happened to be released on an
+      // odd/even repeat, playback could land back in "stopped" milliseconds
+      // after starting, which looked exactly like "pressed Play, still
+      // doesn't play" even though every individual toggle was working
+      // correctly in isolation. e.repeat is true on all but the first
+      // keydown of a hold, so this only blocks the auto-repeated ones.
+      if (e.repeat) return;
+
       if (e.code === 'Space') {
         e.preventDefault();
         try {
