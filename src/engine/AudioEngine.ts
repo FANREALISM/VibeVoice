@@ -397,7 +397,20 @@ class AudioEngine {
         this.scheduleLyricTicks(note.pitch, note.lyric, note.velocity, note.startTick, note.durationTick, note.formant || 1.0);
       });
 
-      Tone.Transport.start();
+      // Explicitly pass the freshly-read current time instead of calling
+      // Transport.start() bare. After the browser auto-suspends the
+      // AudioContext during a period of silence (a real power-saving
+      // behavior, and one this app was especially prone to triggering
+      // during earlier silent-Play bugs) and it's later resumed here via
+      // ensureAudioContextRunning(), Transport's own internal "now"
+      // reference can end up stale relative to the context's actual
+      // currentTime — schedule() callbacks then compute `time` values
+      // that lag the real clock by however long the context was
+      // suspended (tens of seconds in testing), which is scheduling notes
+      // effectively in the past: nothing audible, no error. Passing
+      // Tone.now() explicitly forces Transport to root itself at the
+      // context's real current time on every single Play press.
+      Tone.Transport.start(Tone.now());
       return true;
     }
   }
