@@ -20,16 +20,19 @@ export const Inspector: React.FC = () => {
   const [localLyric, setLocalLyric] = useState('');
   const [localVelocity, setLocalVelocity] = useState<string>('');
   const [localDuration, setLocalDuration] = useState<string>('');
+  const [localFormant, setLocalFormant] = useState(1.0);
 
   useEffect(() => {
     if (!isMulti && note) {
       setLocalLyric(note.lyric);
       setLocalVelocity(String(note.velocity));
       setLocalDuration(String(note.durationTick));
+      setLocalFormant(note.formant || 1.0);
     } else {
       setLocalLyric('');
       setLocalVelocity('');
       setLocalDuration('');
+      setLocalFormant(1.0);
     }
     // Re-sync whenever the selection changes to a different/single note.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,12 +92,6 @@ export const Inspector: React.FC = () => {
     const noteName = notesStr[pitch % 12];
     return `${noteName}${octave}`;
   };
-
-  const [localFormant, setLocalFormant] = useState(1.0);
-  useEffect(() => {
-    setLocalFormant(isMulti ? 1.0 : (note?.formant || 1.0));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMulti, note?.id]);
 
   const commitFormant = (value: number) => {
     if (isMulti) {
