@@ -9,8 +9,20 @@ export const PianoRoll: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<any>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [zoomX, setZoomX] = useState(1);
-  const { notes, addNote, updateNote, selectedNoteIds, toggleNoteSelection, isPlaying, snapToGrid } = useProjectStore();
+  const { notes, addNote, updateNote, selectedNoteIds, toggleNoteSelection, isPlaying, snapToGrid, zoomX, setZoomX } = useProjectStore();
+  // Marquee (box) select: drag on empty canvas to select multiple notes at
+  // once. There was previously no way to select more than one note except
+  // Shift-clicking each individually.
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number; shiftKey: boolean } | null>(null);
+
+  // snapToGrid existed in the store already but nothing actually read it —
+  // every snap calculation below hardcoded a 16th-note grid regardless of
+  // this setting. Centralizing it here so the toggle (added in App.tsx's
+  // status bar) actually does something. When off, snapping to 1 tick is
+  // effectively free placement (Transport.PPQ=480 ticks/beat, so 1 tick is
+  // far finer than anything meaningfully draggable by hand).
+  const getSnapTicks = () => (snapToGrid ? Tone.Transport.PPQ / 4 : 1);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -28,7 +40,8 @@ export const PianoRoll: React.FC = () => {
     const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        setZoomX(prev => Math.max(0.1, Math.min(prev - e.deltaY * 0.005, 5)));
+        const current = useProjectStore.getState().zoomX;
+        setZoomX(Math.max(0.1, Math.min(current - e.deltaY * 0.005, 5)));
       }
     };
     
@@ -85,37 +98,94 @@ export const PianoRoll: React.FC = () => {
     };
   }, [isPlaying, zoomX]);
 
-  const handleStageClick = async (e: any) => {
-    // If we click on an empty area, add a note
-    const clickedOnEmpty = e.target === e.target.getStage();
-    if (clickedOnEmpty) {
+  const addNoteAt = async (pointerPosition: { x: number; y: number }) => {
+    await audioEngine.init();
+    const actualPixelsPerTick = PIXELS_PER_TICK * zoomX;
+
+    const pitch = TOTAL_KEYS - 1 - Math.floor(pointerPosition.y / NOTE_HEIGHT);
+    let startTick = Math.max(0, pointerPosition.x / actualPixelsPerTick);
+    let durationTick = DEFAULT_DURATION;
+
+    const snapTicks = getSnapTicks();
+    startTick = Math.round(startTick / snapTicks) * snapTicks;
+    durationTick = snapTicks; // Make new notes snap duration
+
+    addNote({
+      pitch,
+      startTick,
+      durationTick,
+      lyric: 'a',
+      velocity: DEFAULT_VELOCITY,
+    });
+
+    audioEngine.playNote(pitch, 'a', DEFAULT_VELOCITY);
+  };
+
+  const handleStageMouseDown = (e: any) => {
+    // Only start a potential marquee/add-note gesture if the press started
+    // on empty canvas — notes handle their own mousedown via Konva's
+    // draggable, and e.cancelBubble on their onClick already keeps this
+    // from double-firing.
+    if (e.target !== e.target.getStage()) return;
+    const stage = e.target.getStage();
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+    dragStartRef.current = { x: pos.x, y: pos.y, shiftKey: e.evt.shiftKey };
+    setMarquee({ x: pos.x, y: pos.y, w: 0, h: 0 });
+  };
+
+  const handleStageMouseMove = (e: any) => {
+    if (!dragStartRef.current) return;
+    const stage = e.target.getStage();
+    const pos = stage.getPointerPosition();
+    if (!pos) return;
+    const start = dragStartRef.current;
+    setMarquee({
+      x: Math.min(start.x, pos.x),
+      y: Math.min(start.y, pos.y),
+      w: Math.abs(pos.x - start.x),
+      h: Math.abs(pos.y - start.y),
+    });
+  };
+
+  const handleStageMouseUp = async (e: any) => {
+    const start = dragStartRef.current;
+    dragStartRef.current = null;
+    if (!start) return;
+
+    const stage = e.target.getStage();
+    const pos = stage.getPointerPosition();
+    const dragDistance = pos ? Math.hypot(pos.x - start.x, pos.y - start.y) : 0;
+
+    // Below this threshold, treat it as a click rather than a drag — this
+    // preserves the original "click empty space to add a note" behavior;
+    // only an actual drag becomes a marquee select.
+    if (dragDistance < 4) {
+      setMarquee(null);
       useProjectStore.getState().setSelectedNoteIds([]);
-      const stage = e.target.getStage();
-      const pointerPosition = stage.getPointerPosition();
-      if (!pointerPosition) return;
-
-      await audioEngine.init();
-      const actualPixelsPerTick = PIXELS_PER_TICK * zoomX;
-      
-      const pitch = TOTAL_KEYS - 1 - Math.floor(pointerPosition.y / NOTE_HEIGHT);
-      let startTick = Math.max(0, pointerPosition.x / actualPixelsPerTick);
-      let durationTick = DEFAULT_DURATION;
-
-      const ticksPerBeat = Tone.Transport.PPQ;
-      const snapTicks = ticksPerBeat / 4; // 16th note snap
-      startTick = Math.round(startTick / snapTicks) * snapTicks;
-      durationTick = snapTicks; // Make new notes snap duration
-      
-      addNote({
-        pitch,
-        startTick,
-        durationTick,
-        lyric: 'a',
-        velocity: DEFAULT_VELOCITY,
-      });
-
-      audioEngine.playNote(pitch, 'a', DEFAULT_VELOCITY);
+      if (pos) await addNoteAt(pos);
+      return;
     }
+
+    if (marquee) {
+      const actualPixelsPerTick = PIXELS_PER_TICK * zoomX;
+      const hitIds = notes.filter(n => {
+        const nx = n.startTick * actualPixelsPerTick;
+        const ny = (TOTAL_KEYS - 1 - n.pitch) * NOTE_HEIGHT;
+        const nw = n.durationTick * actualPixelsPerTick;
+        const nh = NOTE_HEIGHT;
+        return nx < marquee.x + marquee.w && nx + nw > marquee.x &&
+               ny < marquee.y + marquee.h && ny + nh > marquee.y;
+      }).map(n => n.id);
+
+      if (start.shiftKey) {
+        const existing = useProjectStore.getState().selectedNoteIds;
+        useProjectStore.getState().setSelectedNoteIds(Array.from(new Set([...existing, ...hitIds])));
+      } else {
+        useProjectStore.getState().setSelectedNoteIds(hitIds);
+      }
+    }
+    setMarquee(null);
   };
 
   const handleSelectNote = async (id: string, pitch: number, lyric: string, velocity: number, isShift: boolean) => {
@@ -138,7 +208,28 @@ export const PianoRoll: React.FC = () => {
         style={{ minWidth: Math.max(size.width, 2000) + 48 }}
       >
         <div className="w-12 border-r border-zinc-800 shrink-0 bg-[#121217]"></div>
-        <div className="flex-1 relative overflow-hidden" style={{ backgroundSize: `${80 * zoomX}px 32px` }}>
+        <div
+          className="flex-1 relative overflow-hidden cursor-pointer"
+          style={{ backgroundSize: `${80 * zoomX}px 32px` }}
+          onClick={(e) => {
+            // Click-to-seek: move the playhead (and Transport's actual
+            // position, so the next Play resumes from here) to wherever
+            // the ruler was clicked. There was previously no way to
+            // reposition playback at all short of Stop (which always
+            // resets to 0).
+            const rect = e.currentTarget.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const actualPixelsPerTick = PIXELS_PER_TICK * zoomX;
+            const clickedTick = Math.max(0, clickX / actualPixelsPerTick);
+            const ticksPerBeat = Tone.Transport.PPQ;
+            const snapTicks = getSnapTicks();
+            const snappedTick = Math.round(clickedTick / snapTicks) * snapTicks;
+            Tone.Transport.position = `${snappedTick}i`;
+            if (playheadRef.current) {
+              playheadRef.current.x(snappedTick * actualPixelsPerTick);
+            }
+          }}
+        >
           {Array.from({ length: 50 }).map((_, i) => (
             <div key={i} className="absolute h-full flex items-end pb-1 border-l border-zinc-700 font-mono text-[10px] text-zinc-500 px-1" style={{ left: i * PIXELS_PER_BEAT * 4 * zoomX, width: PIXELS_PER_BEAT * 4 * zoomX }}>
               {i + 1}
@@ -189,7 +280,9 @@ export const PianoRoll: React.FC = () => {
             <Stage 
               width={Math.max(size.width, 2000)} 
               height={TOTAL_KEYS * NOTE_HEIGHT} 
-              onClick={handleStageClick}
+              onMouseDown={handleStageMouseDown}
+              onMouseMove={handleStageMouseMove}
+              onMouseUp={handleStageMouseUp}
             >
           <Layer>
             {notes.map((note) => {
@@ -206,7 +299,7 @@ export const PianoRoll: React.FC = () => {
                   y={y}
                   draggable
                   dragBoundFunc={(pos) => {
-                    const snapTicks = Tone.Transport.PPQ / 4;
+                    const snapTicks = getSnapTicks();
                     const snapPixels = snapTicks * actualPixelsPerTick;
                     const snappedX = Math.round(pos.x / snapPixels) * snapPixels;
                     const snappedY = Math.round(pos.y / NOTE_HEIGHT) * NOTE_HEIGHT;
@@ -226,7 +319,7 @@ export const PianoRoll: React.FC = () => {
                     const newPitch = Math.max(0, Math.min(TOTAL_KEYS - 1, TOTAL_KEYS - 1 - Math.round(newY / NOTE_HEIGHT)));
                     
                     const ticksPerBeat = Tone.Transport.PPQ;
-                    const snapTicks = ticksPerBeat / 4; // 16th note snap
+                    const snapTicks = getSnapTicks();
                     newStartTick = Math.round(newStartTick / snapTicks) * snapTicks;
 
                     // Snap to grid visually
@@ -269,7 +362,7 @@ export const PianoRoll: React.FC = () => {
                       let newDuration = newWidth / actualPixelsPerTick;
                       
                       const ticksPerBeat = Tone.Transport.PPQ;
-                      const snapTicks = ticksPerBeat / 4;
+                      const snapTicks = getSnapTicks();
                       newDuration = Math.round(newDuration / snapTicks) * snapTicks;
                       newDuration = Math.max(snapTicks, newDuration);
                       e.target.x(newDuration * actualPixelsPerTick - 10);
@@ -280,7 +373,7 @@ export const PianoRoll: React.FC = () => {
                       let newDuration = (e.target.x() + 10) / actualPixelsPerTick;
                       
                       const ticksPerBeat = Tone.Transport.PPQ;
-                      const snapTicks = ticksPerBeat / 4;
+                      const snapTicks = getSnapTicks();
                       newDuration = Math.round(newDuration / snapTicks) * snapTicks;
                       newDuration = Math.max(snapTicks, newDuration);
                       
@@ -322,6 +415,19 @@ export const PianoRoll: React.FC = () => {
               shadowBlur={10}
               listening={false}
             />
+
+            {marquee && (
+              <Rect
+                x={marquee.x}
+                y={marquee.y}
+                width={marquee.w}
+                height={marquee.h}
+                fill="rgba(6, 182, 212, 0.15)"
+                stroke="#06b6d4"
+                strokeWidth={1}
+                listening={false}
+              />
+            )}
           </Layer>
         </Stage>
           </div>

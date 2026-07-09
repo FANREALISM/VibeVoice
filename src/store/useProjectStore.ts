@@ -29,14 +29,17 @@ interface ProjectState {
   isLoadingAudioTrack: boolean;
 
   snapToGrid: boolean;
+  zoomX: number;
   
   past: Note[][];
   future: Note[][];
   
   // Actions
   addNote: (note: Omit<Note, 'id'>) => void;
+  addNotes: (notes: Omit<Note, 'id'>[]) => void;
   updateNote: (id: string, updates: Partial<Note>) => void;
   updateNotes: (ids: string[], updates: Partial<Note>) => void;
+  updateNotesIndividually: (updates: { id: string; updates: Partial<Note> }[]) => void;
   deleteNote: (id: string) => void;
   deleteNotes: (ids: string[]) => void;
   undo: () => void;
@@ -46,6 +49,7 @@ interface ProjectState {
   setTitle: (title: string) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   setSnapToGrid: (snap: boolean) => void;
+  setZoomX: (zoom: number) => void;
   setIsLoadingVoicebank: (loading: boolean) => void;
   setAudioTrackName: (name: string | null) => void;
   setAudioTrackMuted: (muted: boolean) => void;
@@ -86,6 +90,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   audioTrackMuted: false,
   isLoadingAudioTrack: false,
   snapToGrid: true,
+  zoomX: 1,
 
   past: [],
   future: [],
@@ -137,7 +142,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   addNote: (note) => set((state) => ({
     past: [...state.past, state.notes],
     future: [],
-    notes: [...state.notes, { ...note, id: crypto.randomUUID(), formant: 1.0 }],
+    notes: [...state.notes, { ...note, id: crypto.randomUUID(), formant: note.formant ?? 1.0 }],
+    isDirty: true
+  })),
+
+  addNotes: (notesToAdd) => set((state) => ({
+    past: [...state.past, state.notes],
+    future: [],
+    notes: [
+      ...state.notes,
+      ...notesToAdd.map(n => ({ ...n, id: crypto.randomUUID(), formant: n.formant ?? 1.0 }))
+    ],
     isDirty: true
   })),
 
@@ -154,6 +169,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     notes: state.notes.map(n => ids.includes(n.id) ? { ...n, ...updates } : n),
     isDirty: true
   })),
+
+  updateNotesIndividually: (updatesList) => set((state) => {
+    const byId = new Map(updatesList.map(u => [u.id, u.updates]));
+    return {
+      past: [...state.past, state.notes],
+      future: [],
+      notes: state.notes.map(n => byId.has(n.id) ? { ...n, ...(byId.get(n.id) as Partial<Note>) } : n),
+      isDirty: true
+    };
+  }),
 
   deleteNote: (id) => set((state) => ({
     past: [...state.past, state.notes],
@@ -179,6 +204,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   
   setSnapToGrid: (snap) => set({ snapToGrid: snap }),
+  setZoomX: (zoom) => set({ zoomX: Math.max(0.1, Math.min(zoom, 5)) }),
 
   setIsLoadingVoicebank: (loading) => set({ isLoadingVoicebank: loading }),
   setAudioTrackName: (name) => set({ audioTrackName: name, isDirty: true }),
@@ -189,9 +215,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     id: null,
     title: 'Untitled Project',
     bpm: 120,
+    language: 'JP',
     notes: [],
     selectedNoteIds: [],
     isDirty: false,
+    snapToGrid: true,
+    audioTrackName: null,
+    audioTrackMuted: false,
+    isLoadingAudioTrack: false,
     past: [],
     future: []
   }),
@@ -232,6 +263,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return;
     }
     const state = get();
+    // NOTE: this payload does not include language/snapToGrid/audioTrack —
+    // those are silently dropped on cloud save (and therefore can't be
+    // restored by loadProject below either). Not fixing that blind here:
+    // isSupabaseConfigured is hardcoded false in lib/supabase.ts right now,
+    // so this code path is currently unreachable, and guessing at column
+    // names for a table schema I can't inspect risks breaking saves outright
+    // the moment cloud sync is turned on if the guess is wrong. Add the
+    // matching columns to the `projects` table first, then extend this
+    // payload and the corresponding fields in loadProject() below together.
     const payload = {
       user_id: userId,
       title: state.title,
