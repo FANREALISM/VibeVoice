@@ -818,8 +818,18 @@ class AudioEngine {
           // Connect Tone graph into Native Worklet using static connect
           Tone.connect(volNode, workletNode);
           
-          // Connect Worklet directly to Native Destination, avoiding Tone wrappers
-          workletNode.connect(this.nativeContext.destination);
+          // Route through Tone.getDestination() (a Gain/Volume node Tone
+          // manages) rather than nativeContext.destination directly. The
+          // previous direct routing was a leftover from an earlier debugging
+          // session and meant the master volume/mute control added later
+          // had literally zero effect on this path — the primary one, since
+          // this is what plays whenever the worklet is available. Master
+          // volume only ever reached the rare fallback paths (GrainPlayer,
+          // plain synth), which do route through Tone.getDestination() via
+          // effectChain. Tone.connect() here is the correct interop helper
+          // for wiring a raw native AudioWorkletNode into a Tone-managed
+          // node graph.
+          Tone.connect(workletNode, Tone.getDestination());
 
           sourceObj = { 
             cPlayer: consonantPlayer, 

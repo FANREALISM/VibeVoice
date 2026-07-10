@@ -7,6 +7,7 @@ import { PianoRoll } from './components/PianoRoll';
 import { Inspector } from './components/Inspector';
 import { audioEngine } from './engine/AudioEngine';
 import { exportProjectAsZip, importProjectFromZip } from './utils/projectIO';
+import { isSupabaseConfigured } from './lib/supabase';
 import * as Tone from 'tone';
 
 // Module-level clipboard for note copy/paste. Doesn't need to live in the
@@ -620,7 +621,7 @@ export default function App() {
           
           <div className="mt-auto p-4 border-t border-zinc-800/50">
             <div className="bg-zinc-900/50 p-2 rounded text-[10px] text-zinc-500 font-mono text-center">
-              Supabase Connected
+              {isSupabaseConfigured ? 'Supabase Connected' : 'Cloud Sync Disabled'}
               <br/>
               ID: {id?.substring(0, 10) || 'LOCAL_CACHE'}
             </div>
@@ -663,7 +664,9 @@ export default function App() {
         </div>
         <div className="flex gap-4">
           <span className="hidden md:inline">X: 1840 | Y: 128</span>
-          <span className="text-[#06b6d4]">Cloud Synced</span>
+          <span className={isSupabaseConfigured ? "text-[#06b6d4]" : "text-zinc-600"}>
+            {isSupabaseConfigured ? 'Cloud Synced' : 'Local Only'}
+          </span>
         </div>
       </footer>
     </div>
