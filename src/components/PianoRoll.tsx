@@ -24,13 +24,27 @@ export const PianoRoll: React.FC = () => {
   // far finer than anything meaningfully draggable by hand).
   const getSnapTicks = () => (snapToGrid ? Tone.Transport.PPQ / 4 : 1);
 
+  const hasCenteredRef = useRef(false);
+
   useEffect(() => {
     if (!containerRef.current) return;
     const observer = new ResizeObserver((entries) => {
-      setSize({
-        width: entries[0].contentRect.width,
-        height: entries[0].contentRect.height,
-      });
+      const { width, height } = entries[0].contentRect;
+      setSize({ width, height });
+
+      // Center the view on a musically useful octave (C4/MIDI 60) the first
+      // time we know the container's real height. Without this, the roll
+      // opens scrolled to the very top of the 128-key range — clicking
+      // there to place a first note lands it ~5 octaves too high, which is
+      // exactly what produced the pitchRatio=40 clamp warning (and likely
+      // no audible sound) rather than a bug in scheduling or playback.
+      if (!hasCenteredRef.current && height > 0) {
+        hasCenteredRef.current = true;
+        const targetPitch = 60; // C4
+        const rowIndex = TOTAL_KEYS - 1 - targetPitch;
+        const targetY = rowIndex * NOTE_HEIGHT;
+        containerRef.current!.scrollTop = Math.max(0, targetY - height / 2);
+      }
     });
     observer.observe(containerRef.current);
     return () => observer.disconnect();
